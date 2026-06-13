@@ -7,6 +7,7 @@ class UserLocation(models.Model):
     accuracy = models.FloatField(null=True, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(null=True, blank=True)
+    session_id = models.CharField(max_length=255, db_index=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

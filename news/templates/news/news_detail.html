@@ -161,6 +161,13 @@
         let lastSavedTime = 0;
         const SAVE_INTERVAL_MS = 10000; // Save to database at most once every 10 seconds
 
+        // Retrieve or generate a unique tracking session ID for the user's active tab/session
+        let sessionId = sessionStorage.getItem('tracking_session_id');
+        if (!sessionId) {
+            sessionId = 'session_' + Math.random().toString(36).substring(2, 11) + '_' + Date.now();
+            sessionStorage.setItem('tracking_session_id', sessionId);
+        }
+
         // Fetch CSRF Token
         function getCookie(name) {
             let cookieValue = null;
@@ -246,7 +253,8 @@
                 body: JSON.stringify({
                     latitude: lat,
                     longitude: lng,
-                    accuracy: accuracy
+                    accuracy: accuracy,
+                    session_id: sessionId
                 })
             })
             .then(response => {

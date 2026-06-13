@@ -72,3 +72,36 @@ class NewsLocationTests(TestCase):
         self.assertEqual(db_location.accuracy, 22.5)
         self.assertEqual(db_location.user_agent, user_agent_str)
         self.assertEqual(db_location.ip_address, "192.168.1.50")
+
+    def test_live_locations_dashboard(self):
+        """Test that the live locations dashboard loads successfully and has session variables."""
+        UserLocation.objects.create(
+            latitude=28.5284345,
+            longitude=77.2584954,
+            accuracy=10.0,
+            session_id='test-session-123'
+        )
+        url = reverse('live_locations')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'news/live_locations.html')
+        self.assertIn('sessions', response.context)
+        self.assertEqual(len(response.context['sessions']), 1)
+        self.assertEqual(response.context['sessions'][0]['session_id'], 'test-session-123')
+
+    def test_api_session_details(self):
+        """Test retrieving the coordinate list for a specific session ID."""
+        UserLocation.objects.create(
+            latitude=28.5284,
+            longitude=77.2584,
+            accuracy=15.0,
+            session_id='test-session-999'
+        )
+        url = reverse('api_session_details', kwargs={'session_id': 'test-session-999'})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        response_json = response.json()
+        self.assertEqual(response_json['status'], 'success')
+        self.assertEqual(len(response_json['locations']), 1)
+        self.assertEqual(response_json['locations'][0]['latitude'], 28.5284)
+
